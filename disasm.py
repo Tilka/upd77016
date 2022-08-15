@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 
-import string
-from struct import unpack, pack
+import string, struct
 
 class FieldFormatter(string.Formatter):
 	def __init__(self, decoder):
@@ -45,8 +44,7 @@ class BaseDecoder:
 		return 'TODO'
 
 	def field_suf(self, s):
-		# TODO: verify these
-		return ['XXX: suf0', 'l', 'h', 'e', 'eh', 'XXX: suf5', 'XXX: suf6', 'ehl'][s]
+		return ['XXX', 'l', 'h', 'XXX', 'e', 'XXX', 'eh', 'ehl'][s]
 
 	def mem(self, xy, d, dp, modi, r, suf=None):
 		if modi == 0: return 'nop'
@@ -243,13 +241,16 @@ class uPD77016(BaseDecoder):
 
 	def disassemble(self, blob, has_header=False, offset=0x200):
 		if has_header:
-			count, hst, blob = *unpack('<HH', blob[:4]), blob[4:]
+			count, hst, blob = *struct.unpack('<HH', blob[:4]), blob[4:]
 			print(f'header: {count} instructions, HST = 0x{hst:04x}')
 		for i in range(0, len(blob), 4):
 			self.offset = offset + (i // 4)
 			inst = blob[i:i+4]
 			binary = ' '.join(reversed([f'{b:08b}' for b in inst]))
-			dis = self.decode(unpack('<I', inst)[0])
+			try:
+				dis = self.decode(struct.unpack('<I', inst)[0])
+			except:
+				dis = 'EXCEPTION'
 			print(f'0x{self.offset:04x}: {binary}  {dis}')
 			if 'jmp' in dis or 'ret' in dis:
 				print()
@@ -265,16 +266,19 @@ if __name__ == '__main__':
 	d.disassemble(blob[0:0x40], has_header=True)
 	# bootstrap program
 	d.disassemble(blob[0x40:0xb3c], has_header=True)
-	# TODO: loaded to 0x851c
-	encrypted = blob[0xb3c:0x15b68]
+
+	x_mem = [None] * 0x10000
+	y_mem = [None] * 0x10000
+
+	for i in range(0x540b):
+		target = 0x851c + i
+		x_mem[target], y_mem[target] = struct.unpack_from('<HH', blob, 0xb3c + i*4)
 
 	# parse init descriptors
 	data = blob[0x15b68:]
 	checksum = 0
-	fun1 = [[], []]
-	fun2 = [[], []]
 	while True:
-		addr, size, flags = unpack('<HHH', data[:6])
+		addr, size, flags = struct.unpack('<HHH', data[:6])
 		data = data[6:]
 		space = 'XY'[flags & 1]
 		init = ['host', '0'][(flags >> 1) & 1]
@@ -284,17 +288,17 @@ if __name__ == '__main__':
 		print(f'0x{addr:04x}:{space}[{size:4}] = {init}{info}')
 		if init == 'host':
 			for i in range(size):
-				word = unpack('<H', data[:2])[0]
-				if addr == 0x84be:
-					fun1[flags & 1].append(word)
-				if addr == 0xd927:
-					fun2[flags & 1].append(word)
+				word = struct.unpack('<H', data[:2])[0]
+				if space == 'X':
+					x_mem[addr + i] = word
+				else:
+					y_mem[addr + i] = word
 				checksum += word
 				checksum &= 0xFFFF
 				data = data[2:]
 		if flags & 4:
 			break
-	checksum += unpack('<H', data[:2])[0]
+	checksum += struct.unpack('<H', data[:2])[0]
 	checksum &= 0xFFFF
 	data = data[2:]
 	print('checksum:', ['failed :(', 'valid :)'][checksum == 0])
@@ -302,9 +306,9 @@ if __name__ == '__main__':
 	assert len(data) == 0
 
 	print('crypto stuff:')
-	for i in range(len(fun1[0])):
-		int32 = fun1[0][i] + (fun1[1][i] << 16)
-		offset = 0x4be + i
+	for i in range(0x84be, 0x84be + 94):
+		int32 = x_mem[i] + (y_mem[i] << 16)
+		offset = i - 0x8000
 		mod = {
 			0x04d4: 0x000000bf,
 			0x04e2: 0x03f31109,
@@ -316,13 +320,13 @@ if __name__ == '__main__':
 			0x051a: 0x00600000,
 		}.get(offset, 0)
 		if mod:
-			print('ORIGINAL:')
-		dword = pack('<I', int32)
-		d.disassemble(dword, offset=offset)
-		if mod:
+			if True:
+				print('ORIGINAL:')
+				dword = struct.pack('<I', int32)
+				d.disassemble(dword, offset=offset)
 			print('MODIFIED:')
-			dword = pack('<I', int32 ^ mod)
-			d.disassemble(dword, offset=offset)
-	for i in range(len(fun2[0])):
-		dword = pack('<HH', fun2[0][i], fun2[1][i])
-		d.disassemble(dword, offset=0x5927+i)
+		dword = struct.pack('<I', int32 ^ mod)
+		d.disassemble(dword, offset=offset)
+	for i in range(0xd927, 0xd927 + 90):
+		dword = struct.pack('<HH', x_mem[i], y_mem[i])
+		d.disassemble(dword, offset=i - 0x8000)
