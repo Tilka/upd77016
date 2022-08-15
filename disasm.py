@@ -330,3 +330,81 @@ if __name__ == '__main__':
 	for i in range(0xd927, 0xd927 + 90):
 		dword = struct.pack('<HH', x_mem[i], y_mem[i])
 		d.disassemble(dword, offset=i - 0x8000)
+
+	r0, r1, r2 = 0, 0, 0
+	r0 = sum(y_mem[0x3d8:0x3d8+32])
+	r0 = -r0 & 0xFFFF
+	r1 = ~r0 & 0xFFFF
+	r0h = r0
+	r0l = r1
+	y_mem[0x40] = r0h
+	y_mem[0x41] = r0l
+	y_mem[0x66] = r0h
+	y_mem[0x67] = r0l
+
+	def signed(n):
+		# I don't understand negative integers in Python lol
+		return struct.unpack('h', struct.pack('H', n))[0]
+
+	def unsigned(n):
+		return n & 0xFFFF
+
+	for i in range(0x540b):
+		r5 = (y_mem[0x66] << 16) | y_mem[0x67]
+		# function at 0x050a..0x051b
+		r1h = y_mem[0x40]
+		r1l = y_mem[0x41]
+		r2h = x_mem[0x24]
+		r0 = signed(r2h) * unsigned(r1l)
+		r3 = r0 & 0xFFFF
+		r0 = (r0 >> 16) + signed(r2h) * signed(r1h)
+		r1 = r0 >> 16 # signed
+		r2 = r0 & 0xFFFF
+		r2 <<= 16
+		r0 = r2 | r3
+		r0 &= 0xFF_FFFF_FFFF
+		r0 >>= 1 # unsigned
+		r0 += r1
+		r1 = (x_mem[0x25] << 16) | x_mem[0x26]
+		r1 = r0 - r1
+		if r1 > 0:
+			r0 += r1
+		# end of function
+		y_mem[0x66] = (r0 >> 16) & 0xFFFF
+		y_mem[0x67] = r0 & 0xFFFF
+		r1 = (y_mem[0x851c + i] << 16) | x_mem[0x851c + i]
+		r1 ^= r0
+		r2 = (y_mem[0x42] << 16) | y_mem[0x43]
+		r1 ^= r2
+		r0 += r1
+		r2 = (y_mem[0x68] << 16) | y_mem[0x69]
+		r0 &= r2
+		if r0 == 0:
+			r0 = 1
+		y_mem[0x40] = (r0 >> 16) & 0xFFFF
+		y_mem[0x41] = r0 & 0xFFFF
+		# function at 0x04fa..0x0509
+		r6 = (r1 & 0xFF_FFFF_FFFF) >> 16 # unsigned
+		r2 = r6 & 0x8000
+		r0 = (y_mem[0x64] << 16) | y_mem[0x65]
+		if r2 == 0:
+			r2 = r6 & 0x0400
+			r2 <<= 1
+			r0 = r6 & 0x7000
+			r2 |= r0
+			r2 &= 0xFF_FFFF_FFFF
+			r2 >>= 10 # unsigned
+			r2 += 0x44
+			r0 = (y_mem[r2 & 0xFFFF] << 16) | y_mem[(r2 & 0xFFFF) + 1]
+		# end of function
+		r0 &= r5
+		r1 ^= r0
+		x_mem[0x851c + i] = r1 & 0xFFFF
+		y_mem[0x851c + i] = (r1 >> 16) & 0xFFFF
+
+	print('decrypted:')
+	#for i in range(0x851c, 0x851c + 0x540b):
+	# limit garbage output for debugging
+	for i in range(0x851c, 0x851c + 0x100):
+		dword = struct.pack('<HH', x_mem[i], y_mem[i])
+		d.disassemble(dword, offset=i - 0x8000)
