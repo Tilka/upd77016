@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 import string
-from struct import unpack
+from struct import unpack, pack
 
 class FieldFormatter(string.Formatter):
 	def __init__(self, decoder):
@@ -44,13 +44,17 @@ class BaseDecoder:
 				return self.formatter.format(fmt, **fields)
 		return 'TODO'
 
+	def field_suf(self, s):
+		# TODO: verify these
+		return ['XXX: suf0', 'l', 'h', 'e', 'eh', 'XXX: suf5', 'XXX: suf6', 'ehl'][s]
+
 	def mem(self, xy, d, dp, modi, r, suf=None):
 		if modi == 0: return 'nop'
 		if xy == 1: dp += 4
 		mem = ['*dp{n}', '*dp{n}++', '*dp{n}--', '*dp{n}##', '*dp{n}%%', '*!dp{n}##'][modi - 1].format(n=dp)
 		mem += ':X' if xy == 0 else ':Y'
 		if suf is None: suf = 1 if d == 0 else 4
-		suf = ['XXX: suf0', 'l', 'h', 'e', 'eh', ''][suf]
+		suf = self.field_suf(suf)
 		if d == 0:
 			return f'{mem} = r{r}{suf}'
 		else:
@@ -62,7 +66,7 @@ class BaseDecoder:
 		# NOTE: These are based on the uPD77210 family architecture manual.
 		# No idea if they apply to the older uPD77016 family.
 		info = {
-			0x3801: 'SST1 ( Serial status register 1)',
+			0x3801: 'SST1 (Serial status register 1)',
 			0x3802: 'TSST (TDM serial status register)',
 			0x3803: 'TFMT (TDM frame format register)',
 			0x3804: 'TTXL (TDM transmit slot register (lower))',
@@ -73,6 +77,7 @@ class BaseDecoder:
 			0x3820: 'HDT (Host interface data register)',
 			0x3821: 'HST (Host interface status register)',
 			0x383D: 'reserved MMIO',
+			0x383E: 'reserved MMIO',
 			0x3841: 'MSHW (Memory interface setup/hold width setting register)',
 			0x3843: 'MWAIT (Memory interface wait register)',
 			0x3844: 'MIDX (Direct access index register)',
@@ -233,19 +238,15 @@ class uPD77016(BaseDecoder):
 		direction = ['-^', '-v'][absolute > self.offset]
 		return f'0x{absolute:04x} {direction}'
 
-	def field_suf(self, s):
-		# TODO: verify suf 7 being 40 bits
-		return ['XXX: suf0', 'l', 'XXX: suf2 (h?)', 'XXX: suf3 (e?)', 'XXX: suf4 (eh?)', 'XXX: suf5', 'XXX: suf6', ''][s]
-
 	def field_xy(self, x):
 		return 'XY'[x]
 
-	def disassemble(self, blob, has_header=False):
+	def disassemble(self, blob, has_header=False, offset=0x200):
 		if has_header:
 			count, hst, blob = *unpack('<HH', blob[:4]), blob[4:]
 			print(f'header: {count} instructions, HST = 0x{hst:04x}')
 		for i in range(0, len(blob), 4):
-			self.offset = 0x200 + (i // 4)
+			self.offset = offset + (i // 4)
 			inst = blob[i:i+4]
 			binary = ' '.join(reversed([f'{b:08b}' for b in inst]))
 			dis = self.decode(unpack('<I', inst)[0])
@@ -264,9 +265,64 @@ if __name__ == '__main__':
 	d.disassemble(blob[0:0x40], has_header=True)
 	# bootstrap program
 	d.disassemble(blob[0x40:0xb3c], has_header=True)
-	# undecrypted padding?
-	padding = blob[0xb3c:0xb40]
-	# TODO
-	encrypted = blob[0xb40:0x15b60]
-	# probably for X/Y RAM
-	plaintext = blob[0xb15b60:]
+	# TODO: loaded to 0x851c
+	encrypted = blob[0xb3c:0x15b68]
+
+	# parse init descriptors
+	data = blob[0x15b68:]
+	checksum = 0
+	fun1 = [[], []]
+	fun2 = [[], []]
+	while True:
+		addr, size, flags = unpack('<HHH', data[:6])
+		data = data[6:]
+		space = 'XY'[flags & 1]
+		init = ['host', '0'][(flags >> 1) & 1]
+		info = BaseDecoder.mmio(None, addr)
+		if addr >= 0x8000:
+			info = '  #  PAGED'
+		print(f'0x{addr:04x}:{space}[{size:4}] = {init}{info}')
+		if init == 'host':
+			for i in range(size):
+				word = unpack('<H', data[:2])[0]
+				if addr == 0x84be:
+					fun1[flags & 1].append(word)
+				if addr == 0xd927:
+					fun2[flags & 1].append(word)
+				checksum += word
+				checksum &= 0xFFFF
+				data = data[2:]
+		if flags & 4:
+			break
+	checksum += unpack('<H', data[:2])[0]
+	checksum &= 0xFFFF
+	data = data[2:]
+	print('checksum:', ['failed :(', 'valid :)'][checksum == 0])
+	print()
+	assert len(data) == 0
+
+	print('crypto stuff:')
+	for i in range(len(fun1[0])):
+		int32 = fun1[0][i] + (fun1[1][i] << 16)
+		offset = 0x4be + i
+		mod = {
+			0x04d4: 0x000000bf,
+			0x04e2: 0x03f31109,
+			0x04e3: 0x00930911,
+			0x04e4: 0x04000000,
+			0x0510: 0x01080000,
+			0x0511: 0x02400011,
+			0x0513: 0x02440000,
+			0x051a: 0x00600000,
+		}.get(offset, 0)
+		if mod:
+			print('ORIGINAL:')
+		dword = pack('<I', int32)
+		d.disassemble(dword, offset=offset)
+		if mod:
+			print('MODIFIED:')
+			dword = pack('<I', int32 ^ mod)
+			d.disassemble(dword, offset=offset)
+	for i in range(len(fun2[0])):
+		dword = pack('<HH', fun2[0][i], fun2[1][i])
+		d.disassemble(dword, offset=0x5927+i)
