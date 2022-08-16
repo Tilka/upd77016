@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 import string, struct
 from pathlib import Path
+import array
+
+def sign_extend(value, bits):
+    sign_bit = 1 << (bits - 1)
+    return (value & (sign_bit - 1)) - (value & sign_bit)
 
 def bswap16(buf):
     buf = bytearray(buf)
@@ -245,27 +250,119 @@ class uPD77016(BaseDecoder):
     def field_xy(self, x):
         return 'XY'[x]
 
-    def disassemble(self, blob, has_header=False, offset=0x200):
-        if has_header:
-            count, hst, blob = *struct.unpack('<HH', blob[:4]), blob[4:]
-            print(f'header: {count} instructions, HST = 0x{hst:04x}')
-        for i in range(0, len(blob), 4):
-            self.offset = offset + (i // 4)
-            inst = blob[i:i+4]
-            binary = ' '.join(reversed([f'{b:08b}' for b in inst]))
-            try:
-                dis = self.decode(struct.unpack('<I', inst)[0])
-            except:
-                dis = 'EXCEPTION'
-            print(f'0x{self.offset:04x}: {binary}  {dis}')
-            if 'jmp' in dis or 'ret' in dis:
-                print()
+    def disasm_one(self, insn, offset):
+        self.offset = offset
+        insn_bin = f'{insn:032b}'
+        binary = ' '.join((insn_bin[i:i+8] for i in range(0, 32, 8)))
+        try:
+            dis = self.decode(insn)
+        except:
+            dis = 'EXCEPTION'
+        print(f'0x{self.offset:04x}: {binary}  {dis}')
+        if 'jmp' in dis or 'ret' in dis:
+            print()
+
+class Bus:
+        I = 0
+        X = 1
+        Y = 2
+
+class Memory:
+    class Addr:
+        def __init__(self, bus: Bus, offset: int):
+            self.bus, self.offset = bus, offset
+
+    def __init__(self):
+        self.mem = (
+            array.array('H', [0] * 0x8000 * 2),
+            array.array('H', [0] * 0x8000),
+            array.array('H', [0] * 0x8000)
+        )
+        self.dpr_write(0)
+
+    def dump(self):
+        Path('imem.bin').write_bytes(self.mem[Bus.I])
+        Path('dram_x.bin').write_bytes(self.mem[Bus.X])
+        Path('dram_y.bin').write_bytes(self.mem[Bus.Y])
+
+    def _xlate(self, addr: Addr) -> Addr:
+        assert addr.offset < 1 << 16
+        if addr.bus in (Bus.X, Bus.Y) and addr.offset & 0x8000:
+            dpr = self.dpr_read()
+            assert dpr == 0x80, f'unhandled DPR {dpr:4x}'
+            # data buses have striped access to instruction memory
+            offset = (addr.offset & 0x7fff) * 2
+            if addr.bus == Bus.Y:
+                offset += 1
+            return self.Addr(Bus.I, offset)
+
+        # NOTE: _xlate is called with addr.offset being 16bit word index
+        if addr.bus == Bus.I and (addr.offset >> 1) & 0x8000:
+            assert False, f'no imem paging yet. addr {addr.offset:4x}'
+
+        # remap Y periph accesses into X mem (IRL there is a hole in the
+        # mapping that routes the access via X or Y to actual peripheral
+        # register instead of memory)
+        if addr.bus == Bus.Y and 0x3800 <= addr.offset < 0x4000:
+            return self.Addr(Bus.X, addr.offset)
+        return addr
+
+    def read(self, addr: Addr) -> int:
+        addr = self._xlate(addr)
+        return self.mem[addr.bus][addr.offset]
+
+    def write(self, addr: Addr, val: int):
+        addr = self._xlate(addr)
+        self.mem[addr.bus][addr.offset] = val
+
+    def iread(self, addr: int) -> int:
+        addr *= 2
+        l = self.read(self.Addr(Bus.I, addr))
+        h = self.read(self.Addr(Bus.I, addr + 1))
+        return h << 16 | l
+
+    def iwrite(self, addr: int, val: int):
+        addr *= 2
+        self.write(self.Addr(Bus.I, addr), val & 0xffff)
+        self.write(self.Addr(Bus.I, addr + 1), val >> 16)
+
+    def iwrite_buf(self, addr: int, buf):
+        for i in range(0, len(buf), 4):
+            self.iwrite(addr, int.from_bytes(buf[i:i+4], 'little'))
+            addr += 1
+
+    def dpr_read(self) -> int:
+        return self.read(self.Addr(Bus.X, 0x38c1)) & 0xff
+
+    def dpr_write(self, val: int):
+        self.write(self.Addr(Bus.X, 0x38c1), val & 0xff)
+
+    # helpers for accessing imem via xy buses
+    # for assisting with crypto code, not built-in hw behavior
+    def read_imem32(self, addr: int):
+        assert addr & 0x8000
+        h = self.read(self.Addr(Bus.Y, addr))
+        l = self.read(self.Addr(Bus.X, addr))
+        return h << 16 | l
+
+    def write_imem32(self, addr: int, val: int):
+        assert addr & 0x8000
+        self.write(self.Addr(Bus.Y, addr), (val >> 16) & 0xffff)
+        self.write(self.Addr(Bus.X, addr), (val >>  0) & 0xffff)
+
+    def xor_imem32(self, addr: int, val: int):
+        self.write_imem32(addr, self.read_imem32(addr) ^ val)
+    
+    def read_s32_be(self, bus: Bus, addr: int):
+        r = sign_extend(self.read(self.Addr(bus, addr)), 16) << 16
+        r |= self.read(self.Addr(bus, addr + 1))
+        return r
 
 if __name__ == '__main__':
     import sys
     blob = Path(sys.argv[1]).read_bytes()
 
-    # do some doctoring to fix endianness and prepend pre_fw if needed
+    # do some doctoring to fix endianness and remove pre_fw if needed
     pre_fw = bytes.fromhex('''
         0F 00 01 04 80 00 81 38  C1 38 90 48 40 82 00 38
         41 82 08 38 02 00 10 38  02 00 18 38 00 00 04 71
@@ -277,55 +374,206 @@ if __name__ == '__main__':
         blob = bswap16(blob)
         hst = 0x401
     assert hst == 0x401, 'expected host boot header'
-    if not blob.startswith(pre_fw):
-        blob = pre_fw + blob
+    if blob.startswith(pre_fw):
+        blob = blob[len(pre_fw):]
 
     d = uPD77016()
+    mem = Memory()
 
     # XXX: for Wii Speak host bus dump
 
     # IRAM clearing program
-    d.disassemble(blob[0:0x40], has_header=True)
+    count, hst = struct.unpack_from('<2H', pre_fw, 0)
+    mem.iwrite_buf(0x200, pre_fw[4:4+count*4])
+    for i in range(count):
+        addr = 0x200 + i
+        d.disasm_one(mem.iread(addr), addr)
+    # XXX: we don't simulate it running (probably doesn't matter)
+
     # bootstrap program
-    d.disassemble(blob[0x40:0xb3c], has_header=True)
+    count, hst = struct.unpack_from('<2H', blob, 0)
+    mem.iwrite_buf(0x200, blob[4:4+count*4])
+    blob_pos = 4 + count * 4
+    for i in range(count):
+        addr = 0x200 + i
+        d.disasm_one(mem.iread(addr), addr)
 
-    x_mem = [None] * 0x10000
-    y_mem = [None] * 0x10000
-
-    for i in range(0x540b):
-        target = 0x851c + i
-        x_mem[target], y_mem[target] = struct.unpack_from('<HH', blob, 0xb3c + i*4)
+    # we'll be at the region the irom is called to load
+    # irom_bd(dst=iram:0x51c, src=blob_pos, size=0x540b*4)
+    mem.iwrite_buf(0x51c, blob[blob_pos:blob_pos+0x540b * 4])
+    #buf = blob[blob_pos:blob_pos+0x540b * 4]
+    #for i in range(0, len(buf), 4):
+    #    mem.mem[Bus.I][0x51c*2+(i//4+0)] = struct.unpack_from('<H', buf, i)[0]
+    #    mem.mem[Bus.I][0x51c*2+(i//4+1)] = struct.unpack_from('<H', buf, i + 2)[0]
+    blob_pos += 0x540b * 4
 
     # parse init descriptors
-    data = blob[0x15b68:]
     checksum = 0
     while True:
-        addr, size, flags = struct.unpack('<HHH', data[:6])
-        data = data[6:]
-        space = 'XY'[flags & 1]
+        desc_fmt = '<3H'
+        addr, count, flags = struct.unpack_from(desc_fmt, blob, blob_pos)
+        blob_pos += struct.calcsize(desc_fmt)
+        bus = (Bus.X, Bus.Y)[flags & 1]
+        space = 'XY'[bus == Bus.Y]
         init = ['host', '0'][(flags >> 1) & 1]
         info = BaseDecoder.mmio(None, addr)
         if addr >= 0x8000:
             info = '  #  PAGED'
-        print(f'0x{addr:04x}:{space}[{size:4}] = {init}{info}')
-        if init == 'host':
-            for i in range(size):
-                word = struct.unpack('<H', data[:2])[0]
-                if space == 'X':
-                    x_mem[addr + i] = word
-                else:
-                    y_mem[addr + i] = word
-                checksum += word
-                checksum &= 0xFFFF
-                data = data[2:]
+        print(f'0x{addr:04x}:{space}[{count:4x}] = {init}{info}')
+        for i in range(count):
+            word = 0
+            if init == 'host':
+                word = struct.unpack_from('<H', blob, blob_pos)[0]
+                blob_pos += 2
+            mem.write(mem.Addr(bus, addr), word)
+            addr += 1
+            checksum += word
+            checksum &= 0xFFFF
         if flags & 4:
             break
-    checksum += struct.unpack('<H', data[:2])[0]
+    checksum += struct.unpack_from('<H', blob, blob_pos)[0]
+    blob_pos += 2
     checksum &= 0xFFFF
-    data = data[2:]
     print('checksum:', ['failed :(', 'valid :)'][checksum == 0])
     print()
-    assert len(data) == 0
+    assert blob_pos == len(blob)
+
+    # this magic is stored by sparse inits
+    magic = mem.read(mem.Addr(Bus.X, 0x383d)) << 16 | mem.read(mem.Addr(Bus.X, 0x383e))
+    assert magic == 0xaf43b59d
+
+    # the sparse inits will have loaded more code to imem[0x4be:0x51c] and imem[0x5927:0x5981]
+    # however, they get modified by decrypt_body, so defer disassembling them
+
+    # 0x03e7
+    def verify_body_checksum():
+        mem.dpr_write(0x80)
+        crc = 0
+        verify_count = mem.read(mem.Addr(Bus.Y, 1))
+        for i in range(verify_count):
+            r5 = mem.read_imem32(0x8200 + i)
+            if crc & (1 << 31):
+                r5 ^= 0x04c11db7
+            crc <<= 1
+            crc ^= r5
+        
+        expected = mem.read(mem.Addr(Bus.Y, 3)) << 16 | mem.read(mem.Addr(Bus.Y, 2))
+        crc &= 0xffffffff
+        if expected == 0: return
+        assert crc == expected, 'die(0x99e1)'
+    
+    # 0x04be
+    def decrypt_body():
+        mem.dpr_write(0x80)
+        patch_func_04be()
+        path_func_050a()
+
+        offset = 0x4be
+        for i in range(0x5e):
+            addr = offset + i
+            d.disasm_one(mem.iread(addr), addr)
+        
+        r0 = 0
+        for dp4 in range(0x3d8, 0x3d8+32):
+            r0 += mem.read(mem.Addr(Bus.Y, dp4))
+            mem.write(mem.Addr(Bus.Y, dp4), 0)
+        r0l = -r0 & 0xffff
+        r0h = ~r0l & 0x7fff
+        mem.write(mem.Addr(Bus.Y, 0x40), r0h)
+        mem.write(mem.Addr(Bus.Y, 0x41), r0l)
+        mem.write(mem.Addr(Bus.Y, 0x66), r0h)
+        mem.write(mem.Addr(Bus.Y, 0x67), r0l)
+
+        mem.dpr_write(0x80)
+        addr = 0x851c
+        for i in range(0x540b):
+            r5 = mem.read_s32_be(Bus.Y, 0x66)
+            
+            r0 = func_050a()
+            mem.write(mem.Addr(Bus.Y, 0x66), (r0 >> 16) & 0xffff)
+            mem.write(mem.Addr(Bus.Y, 0x67), (r0 >>  0) & 0xffff)
+
+            r1 = mem.read_imem32(addr) # actually sign extended but doesn't matter...i think
+            r1 ^= r0
+            r1 ^= mem.read_s32_be(Bus.Y, 0x24)
+            r0 += r1
+            r0 &= mem.read_s32_be(Bus.Y, 0x68)
+            if r0 == 0: r0 = 1
+
+            mem.write(mem.Addr(Bus.Y, 0x40), (r0 >> 16) & 0xffff)
+            mem.write(mem.Addr(Bus.Y, 0x41), (r0 >>  0) & 0xffff)
+
+            r0 = func_04fa(r1)
+            r0 &= r5
+            r1 ^= r0
+            mem.write_imem32(addr, r1)
+            addr += 1
+
+        # re-obfuscate self before ending
+        patch_func_04be()
+        path_func_050a()
+        mem.dpr_write(0x3f)
+
+    # 0x04fa
+    def func_04fa(r1):
+        r0 = mem.read_s32_be(Bus.Y, 0x64)
+        r6 = r1 >> 16
+        if r6 & 0x8000:
+            return r0
+        addr = 0x44 + (((r6 & 0x0400) << 1 | (r6 & 0x7000)) >> 10)
+        r0 = mem.read_s32_be(Bus.Y, addr)
+        return r0
+
+    # 0x050a
+    def func_050a():
+        r1 = mem.read_s32_be(Bus.Y, 0x40)
+        r2 = sign_extend(mem.read(mem.Addr(Bus.X, 0x24)), 16) << 16
+        r0 = (r2 >> 16) * (r1 & 0xffff) # TODO what's up with signedness etc for this mul
+        r3 = r0 & 0xffff
+        r0 = (r0 >> 16) + (r2 >> 16) * (r1 >> 16) # TODO
+        r1 = sign_extend(r0, 32) >> 16
+        #assert (r0 & (1 << 15)) == 0
+        #r1 = r0 >> 16 # TODO signed
+        r2 = r0 & 0xffff
+        r2 = r2 << 16
+        r0 = r2 | r3
+        r0 = r0 >> 1 # unsigned
+        r0 = r0 + r1
+        r1 = mem.read_s32_be(Bus.Y, 0x25)
+        r1 = r0 - r1
+        if r1 > 0: r0 += r1
+        return r0
+
+    # 0x5941
+    def patch_func_04be():
+        mem.xor_imem32(0x84d4, 0x000000bf)
+        mem.xor_imem32(0x84e2, 0x03f31109)
+        mem.xor_imem32(0x84e3, 0x00930911)
+        mem.xor_imem32(0x84e4, 0x04000000)
+
+    # 0x5960
+    def path_func_050a():
+        mem.xor_imem32(0x8510, 0x01080000)
+        mem.xor_imem32(0x8511, 0x02400011)
+        mem.xor_imem32(0x8513, 0x02440000)
+        mem.xor_imem32(0x851a, 0x00600000)
+
+    decrypt_body()
+
+    offset = 0x5927
+    for i in range(0x5a):
+        addr = offset + i
+        d.disasm_one(mem.iread(addr), addr)
+
+    mem.dump()
+    '''
+    offset = 0x51c
+    for i in range(0x540b):
+        addr = offset + i
+        d.disasm_one(mem.iread(addr), addr)
+    #'''
+    verify_body_checksum()
+    exit()
 
     print('crypto stuff:')
     for i in range(0x84be, 0x84be + 94):
@@ -359,10 +607,10 @@ if __name__ == '__main__':
     r1 = ~r0 & 0xFFFF
     r0h = r0
     r0l = r1
-    y_mem[0x40] = r0h
-    y_mem[0x41] = r0l
-    y_mem[0x66] = r0h
-    y_mem[0x67] = r0l
+    mem.write(mem.Addr(Bus.Y, 0x40), r0h)
+    mem.write(mem.Addr(Bus.Y, 0x41), r0l)
+    mem.write(mem.Addr(Bus.Y, 0x66), r0h)
+    mem.write(mem.Addr(Bus.Y, 0x67), r0l)
 
     def signed(n):
         # I don't understand negative integers in Python lol
