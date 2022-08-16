@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
 import string, struct
+from pathlib import Path
+
+def bswap16(buf):
+    buf = bytearray(buf)
+    for i in range(0, len(buf), 2):
+        buf[i], buf[i+1] = buf[i+1], buf[i]
+    return buf
 
 class FieldFormatter(string.Formatter):
     def __init__(self, decoder):
@@ -255,8 +262,24 @@ class uPD77016(BaseDecoder):
                 print()
 
 if __name__ == '__main__':
-    from sys import argv
-    blob = open(argv[1], 'rb').read()
+    import sys
+    blob = Path(sys.argv[1]).read_bytes()
+
+    # do some doctoring to fix endianness and prepend pre_fw if needed
+    pre_fw = bytes.fromhex('''
+        0F 00 01 04 80 00 81 38  C1 38 90 48 40 82 00 38
+        41 82 08 38 02 00 10 38  02 00 18 38 00 00 04 71
+        E0 3E 00 1C 21 21 A0 4C  02 30 81 38 73 38 90 48
+        00 81 81 38 73 38 90 48  09 00 00 00 00 00 00 2C
+        ''')
+    hst = int.from_bytes(blob[2:4], 'little')
+    if hst == 0x104:
+        blob = bswap16(blob)
+        hst = 0x401
+    assert hst == 0x401, 'expected host boot header'
+    if not blob.startswith(pre_fw):
+        blob = pre_fw + blob
+
     d = uPD77016()
 
     # XXX: for Wii Speak host bus dump
