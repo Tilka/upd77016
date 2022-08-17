@@ -75,6 +75,7 @@ class BaseDecoder:
         # NOTE: These are based on the uPD77210 family architecture manual.
         # No idea if they apply to the older uPD77016 family.
         info = {
+            0x3800: 'TSDT/SDT1 (TDM serial data register/serial data register 1)',
             0x3801: 'SST1 (Serial status register 1)',
             0x3802: 'TSST (TDM serial status register)',
             0x3803: 'TFMT (TDM frame format register)',
@@ -107,6 +108,9 @@ class BaseDecoder:
             0x3875: 'PCD2 (Port command register 2)',
             0x3876: 'PDT3 (Port data register 3)',
             0x3877: 'PCD3 (Port command register 3)',
+            0x3878: 'reserved MMIO',
+            0x3879: 'reserved MMIO',
+            0x387A: 'POWC (Power control register)',
             0x3880: 'ICR0 (Interrupt control register 0)',
             0x3881: 'ICR1 (Interrupt control register 1)',
             0x3882: 'ICR2 (Interrupt control register 2)',
@@ -124,6 +128,7 @@ class BaseDecoder:
             0x3894: 'TIR1 (Timer initialization register 1)',
             0x3896: 'TCSR1 (Timer control register 1)',
             0x38B0: 'CLKC (Clock control register)',
+            0x38B1: 'reserved MMIO',
             0x38C1: 'DPR (Data paging register)',
         }.get(addr, 'MMIO (decription missing)')
         return f'  #  {info}'
