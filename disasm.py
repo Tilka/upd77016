@@ -60,7 +60,7 @@ class BaseDecoder:
     def mem(self, xy, d, dp, modi, r, suf=None):
         if modi == 0: return 'nop'
         if xy == 1: dp += 4
-        mem = ['*dp{n}', '*dp{n}++', '*dp{n}--', '*dp{n}##', '*dp{n}%%', '*!dp{n}##'][modi - 1].format(n=dp)
+        mem = ['*dp{n}', '*dp{n}++', '*dp{n}--', '*dp{n}##', '*dp{n}%%', '*!dp{n}##', 'XXX(modi7)'][modi - 1].format(n=dp)
         mem += ':X' if xy == 0 else ':Y'
         if suf is None: suf = 1 if d == 0 else 4
         suf = self.field_suf(suf)
