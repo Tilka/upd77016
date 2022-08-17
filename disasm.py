@@ -55,7 +55,7 @@ class BaseDecoder:
         return 'TODO'
 
     def field_suf(self, s):
-        return ['XXX', 'l', 'h', 'XXX', 'e', 'XXX', 'eh', 'ehl'][s]
+        return ['XXX(suf0)', 'l', 'h', 'XXX(suf3)', 'e', 'XXX(suf5)', 'eh', 'ehl'][s]
 
     def mem(self, xy, d, dp, modi, r, suf=None):
         if modi == 0: return 'nop'
@@ -136,7 +136,7 @@ class BaseDecoder:
 class ConditionDecoder(BaseDecoder):
     ops = {
         '0000 ttt': '', # always
-        '0001 ttt': 'XXX: cond1 ', # TODO: never?
+        '0001 ttt': 'XXX(cond1) ', # TODO: never?
         '0010 ttt': 'if r{t} == 0 ',
         '0011 ttt': 'if r{t} != 0 ',
         '0100 ttt': 'if r{t} > 0 ',
@@ -144,6 +144,13 @@ class ConditionDecoder(BaseDecoder):
         '0110 ttt': 'if r{t} < 0 ',
         '0111 ttt': 'if r{t} == ex ',
         '1000 ttt': 'if r{t} != ex ',
+        '1001 ttt': 'if r{t} XXX(cond9) ',
+        '1010 ttt': 'if r{t} XXX(condA) ',
+        '1011 ttt': 'if r{t} XXX(condB) ',
+        '1100 ttt': 'if r{t} XXX(condC) ',
+        '1101 ttt': 'if r{t} XXX(condD) ',
+        '1110 ttt': 'if r{t} XXX(condE) ',
+        '1111 ttt': 'if r{t} XXX(condF) ',
     }
     def __init__(self): super().__init__(7)
 
@@ -163,8 +170,8 @@ class Opcode2Decoder(BaseDecoder):
         '1011 aaa bbb': 'r{b} /= r{a}',
         '1100 aaa bbb': 'r{b} += r{a}',
         '1101 aaa bbb': 'r{b} -= r{a}',
-        '1110 aaa bbb': 'r{b} XXX op2_e r{a}',
-        '1111 aaa bbb': 'r{b} XXX op2_f r{a}',
+        '1110 aaa bbb': 'r{b} XXX(op2_e) r{a}',
+        '1111 aaa bbb': 'r{b} XXX(op2_f) r{a}',
     }
     def __init__(self): super().__init__(10)
 
@@ -216,6 +223,7 @@ class uPD77016(BaseDecoder):
         '0101 oooo aaa bbb -- iiiiiiiiiiiiiiii': 'r{b} = r{a} {op_imm} {imm16}',
         '0110 oooo ooo ooo 0000000000 0ccccccc': '{cond}{op_2}',
         '0111 oooo ooo ooo de xx mmm aaa yy nnn bbb': '{op_2}; {mem(0, d, x, m, a)}; {mem(1, e, y, n, b)}',
+        '11111111111111111111111111111111': '(padding)',
         '1ooo oooo ooo ooo de xx mmm aaa yy nnn bbb': '{op_3}; {mem(0, d, x, m, a)}; {mem(1, e, y, n, b)}',
     }
 
