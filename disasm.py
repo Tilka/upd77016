@@ -168,12 +168,12 @@ class Opcode2Decoder(BaseDecoder):
         '0111 aaa bbb': 'r{b} = clip(r{a})',
         '1000 aaa bbb': 'r{b} = round(r{a})',
         '1001 aaa bbb': 'r{b} = exp(r{a})',
-        '1010 aaa bbb': 'r{b} = r{a}',
-        '1011 aaa bbb': 'r{b} /= r{a}',
-        '1100 aaa bbb': 'r{b} += r{a}',
-        '1101 aaa bbb': 'r{b} -= r{a}',
-        '1110 aaa bbb': 'r{b} XXX(op2_e) r{a}',
-        '1111 aaa bbb': 'r{b} XXX(op2_f) r{a}',
+        '1010 aaa bbb': 'r{b} XXX(op2_A) r{a}',
+        '1011 aaa bbb': 'r{b} XXX(op2_B) r{a}',
+        '1100 aaa bbb': 'r{b} = r{a}',
+        '1101 aaa bbb': 'r{b} /= r{a}',
+        '1110 aaa bbb': 'r{b} += r{a}',
+        '1111 aaa bbb': 'r{b} -= r{a}',
     }
     def __init__(self): super().__init__(10)
 
@@ -556,7 +556,7 @@ if __name__ == '__main__':
         r0 = r0 + r1
         r1 = mem.read_s32_be(Bus.Y, 0x25)
         r1 = r0 - r1
-        if r1 > 0: r0 += r1
+        if r1 > 0: r0 = r1
         return r0
 
     # 0x5941
@@ -653,7 +653,7 @@ if __name__ == '__main__':
         r1 = (x_mem[0x25] << 16) | x_mem[0x26]
         r1 = r0 - r1
         if r1 > 0:
-            r0 += r1
+            r0 = r1
         # end of function
         y_mem[0x66] = (r0 >> 16) & 0xFFFF
         y_mem[0x67] = r0 & 0xFFFF
