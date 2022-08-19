@@ -446,6 +446,8 @@ if __name__ == '__main__':
             checksum &= 0xFFFF
         if flags & 4:
             break
+    # can be used to tack on additional entries without needing to parse existing ones
+    print(f'checsum before {checksum:x}')
     checksum += struct.unpack_from('<H', blob, blob_pos)[0]
     blob_pos += 2
     checksum &= 0xFFFF
@@ -481,7 +483,7 @@ if __name__ == '__main__':
     def decrypt_body():
         mem.dpr_write(0x80)
         patch_func_04be()
-        path_func_050a()
+        patch_func_050a()
 
         offset = 0x4be
         for i in range(0x5e):
@@ -526,7 +528,7 @@ if __name__ == '__main__':
 
         # re-obfuscate self before ending
         patch_func_04be()
-        path_func_050a()
+        patch_func_050a()
         mem.dpr_write(0x3f)
 
     # 0x04fa
@@ -567,7 +569,7 @@ if __name__ == '__main__':
         mem.xor_imem32(0x84e4, 0x04000000)
 
     # 0x5960
-    def path_func_050a():
+    def patch_func_050a():
         mem.xor_imem32(0x8510, 0x01080000)
         mem.xor_imem32(0x8511, 0x02400011)
         mem.xor_imem32(0x8513, 0x02440000)
