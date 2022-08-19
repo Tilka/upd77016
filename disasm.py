@@ -407,6 +407,7 @@ if __name__ == '__main__':
 
     # bootstrap program
     count, hst = struct.unpack_from('<2H', blob, 0)
+    print(f'boot iram[0200:{0x200+count:x}]')
     mem.iwrite_buf(0x200, blob[4:4+count*4])
     blob_pos = 4 + count * 4
     for i in range(count):
@@ -415,11 +416,8 @@ if __name__ == '__main__':
 
     # we'll be at the region the irom is called to load
     # irom_bd(dst=iram:0x51c, src=blob_pos, size=0x540b*4)
+    print(f'load iram[051c:{0x051c+0x540b:x}]')
     mem.iwrite_buf(0x51c, blob[blob_pos:blob_pos+0x540b * 4])
-    #buf = blob[blob_pos:blob_pos+0x540b * 4]
-    #for i in range(0, len(buf), 4):
-    #    mem.mem[Bus.I][0x51c*2+(i//4+0)] = struct.unpack_from('<H', buf, i)[0]
-    #    mem.mem[Bus.I][0x51c*2+(i//4+1)] = struct.unpack_from('<H', buf, i + 2)[0]
     blob_pos += 0x540b * 4
 
     # parse init descriptors
