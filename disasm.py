@@ -543,12 +543,14 @@ if __name__ == '__main__':
     def reg_hs(r): return sign_extend(r >> 16, 16)
     def reg_s(r): return sign_extend(r, 40)
     def suma(ro, rh, rl):
+        # XXX is the add after the extra <<1, like mas16? (assuming that's correct)
+        # decryption always has ro=0
         p = reg_s(ro) + reg_hs(rh) * reg_lu(rl)
-        return p << 1 # ?????
+        return p << 1
     def mas16(ro, rh1, rh2):
-        ro = sign_extend(ro, 40) >> 16
-        p = ro + reg_hs(rh1) * reg_hs(rh2)
-        return (p << 1) - ro # ????
+        ro = reg_s(ro) >> 16
+        p = reg_hs(rh1) * reg_hs(rh2)
+        return ro + (p << 1)
 
     # 0x050a
     def func_050a():
@@ -558,13 +560,10 @@ if __name__ == '__main__':
         r3 = r0 & 0xffff
         r0 = mas16(r0, r2, r1)
         r1 = sign_extend(r0, 32) >> 16
-        r2 = r0 & 0xffff
-        r2 = r2 << 16
-        r0 = r2 | r3
-        r0 = r0 >> 1 # unsigned
-        r0 = r0 + r1
-        r1 = mem.read_s32_be(Bus.Y, 0x25)
-        r1 = r0 - r1
+        r0 = (r0 & 0xffff) << 16 | r3
+        r0 >>= 1
+        r0 += r1
+        r1 = r0 - mem.read_s32_be(Bus.Y, 0x25)
         if r1 > 0: r0 = r1
         return r0
 
