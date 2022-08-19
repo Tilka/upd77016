@@ -367,7 +367,7 @@ class Memory:
 
     def xor_imem32(self, addr: int, val: int):
         self.write_imem32(addr, self.read_imem32(addr) ^ val)
-    
+
     def read_s32_be(self, bus: Bus, addr: int):
         r = sign_extend(self.read(self.Addr(bus, addr)), 16) << 16
         r |= self.read(self.Addr(bus, addr + 1))
@@ -471,12 +471,12 @@ if __name__ == '__main__':
                 r5 ^= 0x04c11db7
             crc <<= 1
             crc ^= r5
-        
+
         expected = mem.read(mem.Addr(Bus.Y, 3)) << 16 | mem.read(mem.Addr(Bus.Y, 2))
         crc &= 0xffffffff
         if expected == 0: return
         assert crc == expected, 'die(0x99e1)'
-    
+
     # 0x04be
     def decrypt_body():
         mem.dpr_write(0x80)
@@ -487,13 +487,15 @@ if __name__ == '__main__':
         for i in range(0x5e):
             addr = offset + i
             d.disasm_one(mem.iread(addr), addr)
-        
+
+        # checksum "Copyright(C)"... string
         r0 = 0
         for dp4 in range(0x3d8, 0x3d8+32):
             r0 += mem.read(mem.Addr(Bus.Y, dp4))
             mem.write(mem.Addr(Bus.Y, dp4), 0)
         r0l = -r0 & 0xffff
         r0h = ~r0l & 0x7fff
+        assert r0h == 0x0cd7 and r0l == 0xf328
         mem.write(mem.Addr(Bus.Y, 0x40), r0h)
         mem.write(mem.Addr(Bus.Y, 0x41), r0l)
         mem.write(mem.Addr(Bus.Y, 0x66), r0h)
@@ -503,14 +505,14 @@ if __name__ == '__main__':
         addr = 0x851c
         for i in range(0x540b):
             r5 = mem.read_s32_be(Bus.Y, 0x66)
-            
+
             r0 = func_050a()
             mem.write(mem.Addr(Bus.Y, 0x66), (r0 >> 16) & 0xffff)
             mem.write(mem.Addr(Bus.Y, 0x67), (r0 >>  0) & 0xffff)
 
-            r1 = mem.read_imem32(addr) # actually sign extended but doesn't matter...i think
+            r1 = mem.read_imem32(addr)
             r1 ^= r0
-            r1 ^= mem.read_s32_be(Bus.Y, 0x24)
+            r1 ^= mem.read_s32_be(Bus.Y, 0x42)
             r0 += r1
             r0 &= mem.read_s32_be(Bus.Y, 0x68)
             if r0 == 0: r0 = 1
@@ -531,24 +533,31 @@ if __name__ == '__main__':
 
     # 0x04fa
     def func_04fa(r1):
-        r0 = mem.read_s32_be(Bus.Y, 0x64)
         r6 = r1 >> 16
         if r6 & 0x8000:
-            return r0
+            return mem.read_s32_be(Bus.Y, 0x64)
         addr = 0x44 + (((r6 & 0x0400) << 1 | (r6 & 0x7000)) >> 10)
-        r0 = mem.read_s32_be(Bus.Y, addr)
-        return r0
+        return mem.read_s32_be(Bus.Y, addr)
+
+    def reg_lu(r): return r & 0xffff
+    def reg_hs(r): return sign_extend(r >> 16, 16)
+    def reg_s(r): return sign_extend(r, 40)
+    def suma(ro, rh, rl):
+        p = reg_s(ro) + reg_hs(rh) * reg_lu(rl)
+        return p << 1 # ?????
+    def mas16(ro, rh1, rh2):
+        ro = sign_extend(ro, 40) >> 16
+        p = ro + reg_hs(rh1) * reg_hs(rh2)
+        return (p << 1) - ro # ????
 
     # 0x050a
     def func_050a():
         r1 = mem.read_s32_be(Bus.Y, 0x40)
         r2 = sign_extend(mem.read(mem.Addr(Bus.X, 0x24)), 16) << 16
-        r0 = (r2 >> 16) * (r1 & 0xffff) # TODO what's up with signedness etc for this mul
+        r0 = suma(0, r2, r1)
         r3 = r0 & 0xffff
-        r0 = (r0 >> 16) + (r2 >> 16) * (r1 >> 16) # TODO
+        r0 = mas16(r0, r2, r1)
         r1 = sign_extend(r0, 32) >> 16
-        #assert (r0 & (1 << 15)) == 0
-        #r1 = r0 >> 16 # TODO signed
         r2 = r0 & 0xffff
         r2 = r2 << 16
         r0 = r2 | r3
@@ -574,20 +583,17 @@ if __name__ == '__main__':
         mem.xor_imem32(0x851a, 0x00600000)
 
     decrypt_body()
+    verify_body_checksum()
 
     offset = 0x5927
     for i in range(0x5a):
         addr = offset + i
         d.disasm_one(mem.iread(addr), addr)
 
-    mem.dump()
-    '''
     offset = 0x51c
     for i in range(0x540b):
         addr = offset + i
         d.disasm_one(mem.iread(addr), addr)
-    #'''
-    verify_body_checksum()
     exit()
 
     print('crypto stuff:')
