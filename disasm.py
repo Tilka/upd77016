@@ -447,7 +447,7 @@ if __name__ == '__main__':
         if flags & 4:
             break
     # can be used to tack on additional entries without needing to parse existing ones
-    print(f'checsum before {checksum:x}')
+    print(f'checksum before {checksum:x}')
     checksum += struct.unpack_from('<H', blob, blob_pos)[0]
     blob_pos += 2
     checksum &= 0xFFFF
